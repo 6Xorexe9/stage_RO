@@ -38,86 +38,97 @@ def load_data(directory_path):
             file_data_list.append(FileData(tasks_count, durations, permutation, precedences, uncertain_tasks))
     return file_data_list
 
+def solve_assembly_line(file_data, num_workstations, periods, capacities, robustness_rate):
+    # Initialisation du problème
+    prob = pl.LpProblem("ReconfigurableAssemblyLineBalancing", pl.LpMinimize)
+
+    # Données
+    N = range(1, file_data.tasks_count + 1)
+    U = range(1, num_workstations + 1)  # Supposition de workstations
+    T = range(1, periods + 1)  # Période
+    R = robustness_rate  # Taux de robustesse de la configuration
+
+    # Variables de décision
+    x = {(i, k): pl.LpVariable(f"x_{i}_{k}", cat='Binary') for i, k in product(N, U)}
+    yp = {(k, t): pl.LpVariable(f"yp_{k}_{t}", lowBound=0, cat=pl.LpInteger) for k, t in product(U, T)}
+    yr = {(k, t): pl.LpVariable(f"yr_{k}_{t}", lowBound=0, cat=pl.LpInteger) for k, t in product(U, T)}
+
+    # Objectif
+    prob += pl.lpSum(yp[k, t] + yr[k, t] for k, t in product(U, T)), "TotalResourceUsage"
+
+    # Contraintes
+    # 1. Chaque tâche doit être affectée à une seule workstation
+    for i in N:
+        prob += pl.lpSum(x[i, k] for k in U) == 1, f"TaskAssignment_{i}"
+
+    # Contrainte: Chaque workstation doit avoir au moins une tâche assignée
+    for k in U:
+        prob += pl.lpSum(x[i, k] for i in N) >= 1, f"AtLeastOneTask_{k}"
+
+    # 2. Contrainte de précédence
+    for (i, j) in file_data.precedences:
+        prob += pl.lpSum((k * x[i, k]) for k in U) <= pl.lpSum((k * x[j, k]) for k in U), f"Precedence_{i}_{j}"
+
+    # 3. Contrainte de charge quotidienne de productivité
+    for t in T:
+        for k in U:
+            prob += pl.lpSum((file_data.durations[i - 1] * x[i, k]) for i in N) <= (1+ yp[k, t]) * capacities[t], f"DailyLoad_{t}_{k}"
+
+    # 4. Contrainte de charge quotidienne de robustesse
+    for t in T:
+        for k in U:
+            prob += pl.lpSum((file_data.durations[i-1] * x[i, k]) for i in N if i not in file_data.uncertain_tasks) + (R) * pl.lpSum((file_data.durations[j-1] * x[j, k]) for j in file_data.uncertain_tasks) <= (1+ yp[k, t] + yr[k, t]) * capacities[t], f"RobustDailyLoad_{t}_{k}"
+
+    # Résolution
+    prob.solve(pl.GUROBI())
+
+    # Collecter les résultats
+    assignments = {k: [] for k in U}
+    task_times = {k: [] for k in U}
+    total_time_per_station = {k: 0 for k in U}
+
+    for i in N:
+        for k in U:
+            if pl.value(x[i, k]) == 1:
+                assignments[k].append(i)
+                task_times[k].append((i, file_data.durations[i - 1]))
+                total_time_per_station[k] += file_data.durations[i - 1]
+
+    return {
+        'status': pl.LpStatus[prob.status],
+        'objective': pl.value(prob.objective),
+        'robustness_rate': robustness_rate,
+        'capacities': capacities,
+        'assignments': assignments,
+        'task_times': task_times,
+        'total_time_per_station': total_time_per_station,
+        'production_resources': {k: {t: pl.value(yp[k, t]) for t in T} for k in U},
+        'robustness_resources': {k: {t: pl.value(yr[k, t]) for t in T} for k in U}
+    }
 # Créer et résoudre le problème d'optimisation pour chaque instance de FileData
-def solve_problems(file_data_list):
+def solve_problems(file_data_list,num_workstation,periods,robustness_rate):
     results = []
     for file_data in file_data_list:
-        # Initialisation du problème
-        prob = pl.LpProblem("ReconfigurableAssemblyLineBalancing", pl.LpMinimize)
-
-        # Données
-        N = range(1, file_data.tasks_count + 1)
-        U = range(1, 6)  # Supposition de 5 workstations
-        T = range(1, 6)  # Période (par exemple, une semaine)
-        c = generate_random_capacities(len(T), 30, 50)  # Generate random capacities between 10 and 30
-        print("Capacities for each period:", c)
-        R = 0.5  # Taux de robustesse de la configuration
-
-        # Variables de décision
-        x = {(i, k): pl.LpVariable(f"x_{i}_{k}", cat='Binary') for i, k in product(N, U)}
-        yp = {(k, t): pl.LpVariable(f"yp_{k}_{t}", lowBound=0, cat=pl.LpInteger) for k, t in product(U, T)}
-        yr = {(k, t): pl.LpVariable(f"yr_{k}_{t}", lowBound=0, cat=pl.LpInteger) for k, t in product(U, T)}
-
-        # Objectif
-        prob += pl.lpSum(yp[k, t] + yr[k, t] for k, t in product(U, T)), "TotalResourceUsage"
-
-        # Contraintes
-        # 1. Chaque tâche doit être affectée à une seule workstation
-        for i in N:
-            prob += pl.lpSum(x[i, k] for k in U) == 1, f"TaskAssignment_{i}"
-        # Contrainte: Chaque workstation doit avoir au moins une tâche assignée
-        for k in U:
-            prob += pl.lpSum(x[i, k] for i in N) >= 1, f"AtLeastOneTask_{k}"
-
-        # 2. Contrainte de précédence
-        for (i, j) in file_data.precedences:
-            prob += pl.lpSum((k * x[i, k]) for k in U) <= pl.lpSum((k * x[j, k]) for k in U), f"Precedence_{i}_{j}"
-
-        # 3. Contrainte de charge quotidienne de productivité
-        for t in T:
-            for k in U:
-                prob += pl.lpSum((file_data.durations[i - 1] * x[i, k]) for i in N) <= (1 + yp[k, t]) * c[t], f"DailyLoad_{t}_{k}"
-
-        # 4. Contrainte de charge quotidienne de robustesse
-        for t in T:
-            for k in U:
-                prob += pl.lpSum((file_data.durations[i-1] * x[i, k]) for i in N if i not in file_data.uncertain_tasks) + (1+R) * pl.lpSum((file_data.durations[j-1] * x[j, k]) for j in file_data.uncertain_tasks) <= (1 + yp[k, t] + yr[k, t]) * c[t], f"RobustDailyLoad_{t}_{k}"
-
-        # Résolution
-        prob.solve(pl.GUROBI())
-
-        # Collecter les résultats
-        assignments = {k: [] for k in U}
-        task_times = {k: [] for k in U}
-        total_time_per_station = {k: 0 for k in U}
-
-        for i in N:
-            for k in U:
-                if pl.value(x[i, k]) == 1:
-                    assignments[k].append(i)
-                    task_times[k].append((i, file_data.durations[i - 1]))
-                    total_time_per_station[k] += file_data.durations[i - 1]
-
-        results.append({
-            'status': pl.LpStatus[prob.status],
-            'objective': pl.value(prob.objective),
-            'assignments': assignments,
-            'task_times': task_times,
-            'total_time_per_station': total_time_per_station,
-            'production_resources': {k: {t: pl.value(yp[k, t]) for t in T} for k in U},
-            'robustness_resources': {k: {t: pl.value(yr[k, t]) for t in T} for k in U}
-        })
+        for r in robustness_rate:
+            sum_of_duration=0
+            for duree in file_data.durations:
+                sum_of_duration=sum_of_duration+duree
+            max_capacity=sum_of_duration/num_workstation
+            capacities=generate_random_capacities(periods,0,max_capacity)
+            results.append(solve_assembly_line(file_data,num_workstation,periods,capacities,r))
 
     return results
 
  # Chemin vers le répertoire contenant les fichiers
 directory_path = "./test/"
 data_list = load_data(directory_path)
-results = solve_problems(data_list)
+results = solve_problems(data_list,5,3,[1,2,3])
 
 for result in results:
     print("Statut de résolution:", result['status'])
     print("Valeur de la fonction objectif (TotalResourceUsage):", result['objective'])
+    print("valeur de la rubustess",result['robustness_rate'])
+    print("les deferent capacities sur la periode choisi",result['capacities'])
     print("Assignments per Station and Task Times:")
     for k in result['assignments']:
         print(f"Station {k}:")
