@@ -106,23 +106,24 @@ def solve_assembly_line(file_data, num_workstations, periods, capacities, robust
         'robustness_resources': {k: {t: pl.value(yr[k, t]) for t in T} for k in U}
     }
 # Créer et résoudre le problème d'optimisation pour chaque instance de FileData
-def solve_problems(file_data_list,num_workstation,periods,robustness_rate):
+def solve_problems(file_data_list,num_workstation,periods,robustness_rate,num_cap_try):
     results = []
     for file_data in file_data_list:
         for r in robustness_rate:
             sum_of_duration=0
             for duree in file_data.durations:
                 sum_of_duration=sum_of_duration+duree
-            max_capacity=sum_of_duration/num_workstation
-            capacities=generate_random_capacities(periods,0,max_capacity)
-            results.append(solve_assembly_line(file_data,num_workstation,periods,capacities,r))
+            max_capacity = int(sum_of_duration / num_workstation)
+            for c in range(0,num_cap_try):
+                capacities=generate_random_capacities(periods,0,max_capacity)
+                results.append(solve_assembly_line(file_data,num_workstation,periods,capacities,r))
 
     return results
 
  # Chemin vers le répertoire contenant les fichiers
 directory_path = "./test/"
 data_list = load_data(directory_path)
-results = solve_problems(data_list,5,3,[1,2,3])
+results = solve_problems(data_list,5,3,[1,2,3],3)
 
 for result in results:
     print("Statut de résolution:", result['status'])
