@@ -1,6 +1,19 @@
 import pulp as pl
 import glob
 from itertools import product
+import random
+
+
+def generate_random_capacities(num_periods, min_capacity, max_capacity):
+    """
+    Generate random capacities for each period.
+
+    :param num_periods: Number of periods
+    :param min_capacity: Minimum capacity value
+    :param max_capacity: Maximum capacity value
+    :return: Dictionary with random capacities for each period
+    """
+    return {t: random.randint(min_capacity, max_capacity) for t in range(1, num_periods + 1)}
 
 
 class FileData:
@@ -35,8 +48,9 @@ def solve_problems(file_data_list):
         # Données
         N = range(1, file_data.tasks_count + 1)
         U = range(1, 6)  # Supposition de 5 workstations
-        T = range(1, 4)  # Période (par exemple, une semaine)
-        c = {t: 20 for t in T}  # Capacité maximale de charge pour chaque journée
+        T = range(1, 6)  # Période (par exemple, une semaine)
+        c = generate_random_capacities(len(T), 30, 50)  # Generate random capacities between 10 and 30
+        print("Capacities for each period:", c)
         R = 0.5  # Taux de robustesse de la configuration
 
         # Variables de décision
@@ -74,32 +88,41 @@ def solve_problems(file_data_list):
 
         # Collecter les résultats
         assignments = {k: [] for k in U}
+        task_times = {k: [] for k in U}
+        total_time_per_station = {k: 0 for k in U}
+
         for i in N:
             for k in U:
                 if pl.value(x[i, k]) == 1:
                     assignments[k].append(i)
+                    task_times[k].append((i, file_data.durations[i - 1]))
+                    total_time_per_station[k] += file_data.durations[i - 1]
 
         results.append({
             'status': pl.LpStatus[prob.status],
             'objective': pl.value(prob.objective),
             'assignments': assignments,
+            'task_times': task_times,
+            'total_time_per_station': total_time_per_station,
             'production_resources': {k: {t: pl.value(yp[k, t]) for t in T} for k in U},
             'robustness_resources': {k: {t: pl.value(yr[k, t]) for t in T} for k in U}
         })
 
     return results
 
-
-# Chemin vers le répertoire contenant les fichiers
+ # Chemin vers le répertoire contenant les fichiers
 directory_path = "./test/"
 data_list = load_data(directory_path)
 results = solve_problems(data_list)
 
-# Affichage des résultats pour chaque instance
 for result in results:
     print("Statut de résolution:", result['status'])
     print("Valeur de la fonction objectif (TotalResourceUsage):", result['objective'])
-    print("Assignments:", result['assignments'])
+    print("Assignments per Station and Task Times:")
+    for k in result['assignments']:
+        print(f"Station {k}:")
+        for task_id, time in result['task_times'][k]:
+            print(f"  Task {task_id} - Duration: {time}")
+        print(f"Total Time at Station {k}: {result['total_time_per_station'][k]}")
     print("Production resources:", result['production_resources'])
     print("Robustness resources:", result['robustness_resources'])
-
